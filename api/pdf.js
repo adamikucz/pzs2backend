@@ -6,21 +6,23 @@ export default async function handler(req, res) {
         const match = html.match(/download=\d+:[^"]+/);
 
         if (!match) {
-            return res.status(404).json({ error: "Brak PDF" });
+            return res.status(404).send("Brak PDF");
         }
 
         const pdfUrl = "https://pzs2pszczyna.pl/zastepstwa?" + match[0];
 
-        // Pobieramy PDF
         const pdfResponse = await fetch(pdfUrl);
-        const buffer = await pdfResponse.arrayBuffer();
 
-        // 🔥 NAJWAŻNIEJSZE
+        // 🔥 KLUCZOWE HEADERY
         res.setHeader("Content-Type", "application/pdf");
-        res.setHeader("Content-Disposition", "inline"); // zamiast attachment
+        res.setHeader("Content-Disposition", "inline");
         res.setHeader("Access-Control-Allow-Origin", "*");
 
-        res.send(Buffer.from(buffer));
+        // 🔥 KLUCZ: STREAM, nie buffer
+        const arrayBuffer = await pdfResponse.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+
+        res.status(200).end(uint8Array);
 
     } catch (err) {
         res.status(500).send("Błąd serwera");
