@@ -1,7 +1,7 @@
 export default async function handler(req, res) {
     try {
-        const response = await fetch("https://pzs2pszczyna.pl/zastepstwa");
-        const html = await response.text();
+        const page = await fetch("https://pzs2pszczyna.pl/zastepstwa");
+        const html = await page.text();
 
         const match = html.match(/download=\d+:[^"]+/);
 
@@ -11,14 +11,18 @@ export default async function handler(req, res) {
 
         const pdfUrl = "https://pzs2pszczyna.pl/zastepstwa?" + match[0];
 
+        // Pobieramy PDF
+        const pdfResponse = await fetch(pdfUrl);
+        const buffer = await pdfResponse.arrayBuffer();
+
+        // 🔥 NAJWAŻNIEJSZE
+        res.setHeader("Content-Type", "application/pdf");
+        res.setHeader("Content-Disposition", "inline"); // zamiast attachment
         res.setHeader("Access-Control-Allow-Origin", "*");
 
-        res.json({
-            pdfUrl,
-            updated: new Date().toISOString()
-        });
+        res.send(Buffer.from(buffer));
 
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        res.status(500).send("Błąd serwera");
     }
 }
