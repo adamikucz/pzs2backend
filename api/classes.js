@@ -1,25 +1,40 @@
+import * as cheerio from "cheerio";
+
+function clean(text) {
+  return String(text || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 export default async function handler(req, res) {
   try {
     const baseUrl = "https://pzs2pszczyna.pl/www/plan_lekcji/plany/";
-
-    // Zakres do przeszukania (możesz zwiększyć jeśli kiedyś będzie więcej klas)
-    const candidates = Array.from({ length: 60 }, (_, i) => `o${i + 1}`);
+    const candidates = Array.from({ length: 50 }, (_, i) => `o${i + 1}`);
 
     const results = [];
 
     for (const id of candidates) {
       try {
         const url = `${baseUrl}${id}.html`;
-        const response = await fetch(url, { method: "HEAD" });
 
-        if (response.ok) {
-          results.push({
-            id,
-            name: id.toUpperCase()
-          });
+        const response = await fetch(url);
+        if (!response.ok) continue;
+
+        const html = await response.text();
+        const $ = cheerio.load(html);
+
+        // 🔥 tu wyciągamy prawdziwą nazwę klasy
+        let name = clean($(".tytulnapis").first().text());
+
+        // fallback jeśli coś pójdzie nie tak
+        if (!name) {
+          name = id.toUpperCase();
         }
+
+        results.push({ id, name });
       } catch (e) {
-        // ignorujemy błędy pojedynczych requestów
+        // ignorujemy błędy pojedynczych klas
       }
     }
 
@@ -30,7 +45,7 @@ export default async function handler(req, res) {
   } catch (err) {
     res.status(500).json({
       error: "Błąd wykrywania klas",
-      details: err.message
+      details: err.message,
     });
   }
 }
