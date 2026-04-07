@@ -15,8 +15,6 @@ function directRows($, table) {
 
 function cellToLines($, td) {
   const clone = $(td).clone();
-
-  // usuń zagnieżdżone tabele, jeśli są
   clone.find("table").remove();
 
   const html = clone.html() || "";
@@ -30,6 +28,17 @@ function cellToLines($, td) {
     .split("\n")
     .map(clean)
     .filter(Boolean);
+}
+
+function normalizeRow(cells) {
+  const fixed = cells.slice(0, 7).map(cell => {
+    if (Array.isArray(cell)) return cell.filter(Boolean);
+    const txt = clean(cell);
+    return txt ? [txt] : [];
+  });
+
+  while (fixed.length < 7) fixed.push([]);
+  return fixed;
 }
 
 function scoreTable($, table) {
@@ -95,13 +104,13 @@ export default async function handler(req, res) {
       if (flat.includes("plan lekcji")) return;
       if (flat.includes("obowiązuje od")) return;
 
-      rows.push(cells);
+      rows.push(normalizeRow(cells));
     });
 
     const bodyText = clean($("body").text());
 
     const validFromMatch = bodyText.match(
-      /Obowiązuje od:\s*([^]*?)(?:Drukuj|wygenerowano|za pomocą programu|$)/i
+      /Obowiązuje od:\s*([^]*?)(?:Drukuj plan|wygenerowano|za pomocą programu|$)/i
     );
     const generatedAtMatch = bodyText.match(/wygenerowano\s*([0-9]{1,2}\.[0-9]{1,2}\.[0-9]{4})/i);
 
