@@ -1,27 +1,39 @@
+import * as cheerio from 'cheerio';
+
 export default async function handler(req, res) {
-    try {
-        const page = await fetch("https://pzs2pszczyna.pl/");
-        const html = await page.text();
+  try {
+    const response = await fetch('https://pzs2pszczyna.pl/');
+    const html = await response.text();
 
-        // 🔥 wyciągamy aktualności
-        const items = [...html.matchAll(/<h2 class="item-title".*?<\/p>/gs)];
+    const $ = cheerio.load(html);
 
-        const news = items.slice(0, 5).map(item => {
-            const block = item[0];
+    const news = [];
 
-            const titleMatch = block.match(/<a[^>]*>(.*?)<\/a>/);
-            const descMatch = block.match(/<p>(.*?)<\/p>/);
+    $('.items-row .item').each((_, el) => {
+      const item = $(el);
 
-            const title = titleMatch ? titleMatch[1].trim() : "Brak tytułu";
-            const desc = descMatch ? descMatch[1].replace(/<[^>]+>/g, "").trim() : "";
+      const titleEl = item.find('h2.item-title a').first();
+      const descEl = item.find('p').first();
 
-            return { title, desc };
+      const title = titleEl.text().trim();
+      const href = titleEl.attr('href') || '';
+      const desc = descEl.text().replace(/\s+/g, ' ').trim();
+
+      if (title && desc) {
+        news.push({
+          title,
+          desc,
+          href: href.startsWith('http') ? href : `https://pzs2pszczyna.pl${href}`
         });
+      }
+    });
 
-        res.setHeader("Access-Control-Allow-Origin", "*");
-        res.status(200).json(news);
-
-    } catch (err) {
-        res.status(500).json({ error: "Błąd pobierania aktualności" });
-    }
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.status(200).json(news.slice(0, 8));
+  } catch (err) {
+    res.status(500).json({
+      error: 'Błąd pobierania aktualności',
+      details: err.message
+    });
+  }
 }
