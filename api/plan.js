@@ -7,12 +7,23 @@ function clean(text) {
     .trim();
 }
 
+function directRows($, table) {
+  const tbodyRows = $(table).children("tbody").children("tr");
+  if (tbodyRows.length) return tbodyRows;
+  return $(table).children("tr");
+}
+
 function cellToLines($, td) {
-  const html = $(td).html() || "";
+  const clone = $(td).clone();
+
+  // usuń zagnieżdżone tabele, jeśli są
+  clone.find("table").remove();
+
+  const html = clone.html() || "";
   const text = html
     .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
+    .replace(/<\/(div|p|li|tr)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ");
 
   return text
@@ -21,14 +32,22 @@ function cellToLines($, td) {
     .filter(Boolean);
 }
 
-function rowText($, table) {
-  return clean(
-    table
-      .find("tr")
-      .map((_, tr) => clean($(tr).text()))
-      .get()
-      .join(" ")
-  );
+function scoreTable($, table) {
+  const rows = directRows($, table);
+  if (!rows.length) return 0;
+
+  const text = clean(rows.map((_, tr) => $(tr).text()).get().join(" ")).toLowerCase();
+
+  const weekdays = ["poniedziałek", "wtorek", "środa", "czwartek", "piątek"];
+  const dayHits = weekdays.reduce((sum, day) => sum + (text.includes(day) ? 1 : 0), 0);
+  const timeHits = (text.match(/\b\d{1,2}:\d{2}\s*-\s*\d{1,2}:\d{2}\b/g) || []).length;
+
+  let cellCount = 0;
+  rows.each((_, tr) => {
+    cellCount += $(tr).children("th,td").length;
+  });
+
+  return dayHits * 20 + timeHits * 3 + Math.min(rows.length, 20) + Math.min(cellCount / 3, 20);
 }
 
 export default async function handler(req, res) {
@@ -47,21 +66,8 @@ export default async function handler(req, res) {
     const tables = $("table").toArray();
 
     const timetableTable = tables
-      .map((table) => ({
-        el: table,
-        text: rowText($, $(table)),
-      }))
-      .filter(({ text }) => {
-        const t = text.toLowerCase();
-        return (
-          t.includes("poniedziałek") &&
-          t.includes("wtorek") &&
-          t.includes("środa") &&
-          t.includes("czwartek") &&
-          t.includes("piątek")
-        );
-      })
-      .sort((a, b) => rowText($, $(b.el)).length - rowText($, $(a.el)).length)[0]?.el;
+      .map((table) => ({ el: table, score: scoreTable($, table) }))
+      .sort((a, b) => b.score - a.score)[0]?.el;
 
     if (!timetableTable) {
       return res.status(200).json({
@@ -75,44 +81,37 @@ export default async function handler(req, res) {
 
     const rows = [];
 
-    $(timetableTable)
-      .find("tr")
-      .each((_, tr) => {
-        const cells = [];
+    directRows($, timetableTable).each((_, tr) => {
+      const cells = $(tr)
+        .children("th,td")
+        .toArray()
+        .map((td) => cellToLines($, td));
 
-        $(tr)
-          .find("th, td")
-          .each((_, td) => {
-            const lines = cellToLines($, td);
-            cells.push(lines);
-          });
+      if (!cells.length) return;
 
-        const rowFlatText = cells.flat().join(" ").toLowerCase();
+      const flat = cells.flat().join(" ").toLowerCase();
+      if (flat.includes("drukuj")) return;
+      if (flat.includes("wygenerowano")) return;
+      if (flat.includes("plan lekcji")) return;
+      if (flat.includes("obowiązuje od")) return;
 
-        if (!cells.length) return;
-        if (rowFlatText.includes("drukuj")) return;
-        if (rowFlatText.includes("wygenerowano")) return;
-        if (rowFlatText.includes("plan lekcji")) return;
-        if (rowFlatText.includes("obowiązuje od")) return;
-
-        rows.push(cells);
-      });
+      rows.push(cells);
+    });
 
     const bodyText = clean($("body").text());
 
-    const validFrom =
-      (bodyText.match(/Obowiązuje od:\s*([^\n]+)/i) || [])[1] || null;
-
-    const generatedAt =
-      (bodyText.match(/wygenerowano\s*([0-9.\-: ]+)/i) || [])[1] || null;
+    const validFromMatch = bodyText.match(
+      /Obowiązuje od:\s*([^]*?)(?:Drukuj|wygenerowano|za pomocą programu|$)/i
+    );
+    const generatedAtMatch = bodyText.match(/wygenerowano\s*([0-9]{1,2}\.[0-9]{1,2}\.[0-9]{4})/i);
 
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
 
     res.status(200).json({
       classId,
-      validFrom,
-      generatedAt,
+      validFrom: validFromMatch ? clean(validFromMatch[1]) : null,
+      generatedAt: generatedAtMatch ? generatedAtMatch[1] : null,
       rows,
     });
   } catch (err) {
