@@ -29,7 +29,7 @@ export default async function handler(req, res) {
     });
 
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.status(200).json(news.slice(0, 8));
+    res.status(200).json(news.slice(0, 5));
   } catch (err) {
     res.status(500).json({
       error: 'Błąd pobierania aktualności',
