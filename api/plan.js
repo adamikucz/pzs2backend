@@ -4,51 +4,53 @@ function clean(text) {
   return text.replace(/\s+/g, " ").trim();
 }
 
+function parseCell($, td) {
+  // zachowujemy linie!
+  return $(td)
+    .html()
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .split("\n")
+    .map(t => clean(t))
+    .filter(Boolean);
+}
+
 export default async function handler(req, res) {
   try {
-    const classId = String(req.query.class || "o1").trim();
+    const classId = String(req.query.class || "o1");
     const url = `https://pzs2pszczyna.pl/www/plan_lekcji/plany/${classId}.html`;
 
     const response = await fetch(url);
-    if (!response.ok) {
-      return res.status(404).json({ error: "Nie znaleziono planu" });
-    }
-
     const html = await response.text();
+
     const $ = cheerio.load(html);
 
-    const rows = [];
-    $("table tr").each((_, tr) => {
-      const cells = $(tr)
-        .find("th, td")
-        .map((_, td) => clean($(td).text()))
-        .get()
-        .filter(Boolean);
+    const table = $("table").first();
 
-      if (cells.length) rows.push(cells);
+    const rows = [];
+
+    table.find("tr").each((_, tr) => {
+      const row = [];
+
+      $(tr).find("td, th").each((_, td) => {
+        row.push(parseCell($, td));
+      });
+
+      if (row.length) rows.push(row);
     });
 
-    const bodyText = clean($("body").text());
-
-    const validFrom =
-      (bodyText.match(/Obowiązuje od:\s*([^\n]+)/i) || [])[1] || null;
-
-    const generatedAt =
-      (bodyText.match(/wygenerowano\s*([0-9.]+)/i) || [])[1] || null;
+    // ❌ usuwamy śmieci (drukuj itp.)
+    const cleanRows = rows.filter(row =>
+      !row.some(cell =>
+        cell.join(" ").toLowerCase().includes("drukuj") ||
+        cell.join(" ").toLowerCase().includes("wygenerowano")
+      )
+    );
 
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "s-maxage=3600, stale-while-revalidate=86400");
+    res.status(200).json({ rows: cleanRows });
 
-    res.status(200).json({
-      classId,
-      validFrom,
-      generatedAt,
-      rows,
-    });
   } catch (err) {
-    res.status(500).json({
-      error: "Błąd pobierania planu",
-      details: err.message,
-    });
+    res.status(500).json({ error: err.message });
   }
 }
