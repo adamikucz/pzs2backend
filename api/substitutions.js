@@ -17,6 +17,7 @@ function isNoiseLine(line) {
     !t ||
     t === "pobierz" ||
     t === "szczegóły" ||
+    t === "cieszynie" ||
     t.includes("powered by phoca download") ||
     t.includes("drukuj") ||
     t.includes("plan lekcji optivum") ||
@@ -34,11 +35,13 @@ function isTeacherHeader(line) {
   if (t.includes("lek.")) return false;
   if (/\b\d{1,2}:\d{2}\b/.test(t)) return false;
 
-  return /^(?:[IVXLCDM]+\s+)?[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+,?$/u.test(t);
+  // bezpieczna heurystyka: nauczyciel zwykle ma kropkę albo przecinek
+  // dzięki temu "Cieszynie" nie wejdzie jako nauczyciel
+  return /[.,]/.test(t);
 }
 
 function extractClasses(line) {
-  const matches = [...line.matchAll(/\b\d{1,2}[A-ZĄĆĘŁŃÓŚŹŻa-ząćęłńóśźż][A-Za-z0-9ĄĆĘŁŃÓŚŹŻąćęłńóśźż./-]*\b/g)];
+  const matches = [...line.matchAll(/\b\d{1,2}[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż][A-Za-z0-9ĄĆĘŁŃÓŚŹŻąćęłńóśźż./-]*\b/g)];
   return [...new Set(matches.map(m => m[0]))];
 }
 
@@ -96,6 +99,7 @@ function parseItems(text) {
     .filter(line => !isNoiseLine(line));
 
   const items = [];
+  const seen = new Set();
   let currentTeacher = null;
 
   for (const line of lines) {
@@ -109,9 +113,18 @@ function parseItems(text) {
     const type = detectType(line);
     const summary = stripMarkers(line);
 
-    // pomijamy śmieci, ale zostawiamy wpisy, nawet jeśli nie wykryto klasy,
-    // bo w PDF-ach szkoły czasem zapis jest niestandardowy
     if (!summary) continue;
+
+    const key = [
+      currentTeacher || "",
+      classes.join(","),
+      lessons.join(","),
+      type,
+      summary
+    ].join("|");
+
+    if (seen.has(key)) continue;
+    seen.add(key);
 
     items.push({
       teacher: currentTeacher,
@@ -121,6 +134,7 @@ function parseItems(text) {
       type,
       summary,
       raw: line,
+      kind: classes.length ? "class" : (lessons.length ? "teacher" : "general"),
     });
   }
 
