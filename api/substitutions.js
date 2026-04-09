@@ -34,10 +34,9 @@ function isTeacherHeader(line) {
   if (!t) return false;
   if (t.includes("lek.")) return false;
   if (/\b\d{1,2}:\d{2}\b/.test(t)) return false;
+  if (!/[,.]$/.test(t)) return false;
 
-  // bezpieczna heurystyka: nauczyciel zwykle ma kropkę albo przecinek
-  // dzięki temu "Cieszynie" nie wejdzie jako nauczyciel
-  return /[.,]/.test(t);
+  return /^(?:[IVXLCDM]+\s+)?(?:[A-Z]\.\s*)?[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s+[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?[,\.]$/u.test(t);
 }
 
 function extractClasses(line) {
@@ -98,13 +97,20 @@ function parseItems(text) {
     .filter(Boolean)
     .filter(line => !isNoiseLine(line));
 
-  const items = [];
-  const seen = new Set();
-  let currentTeacher = null;
+  const general = [];
+  const teachers = [];
+  const seenGeneral = new Set();
+
+  let currentTeacherGroup = null;
 
   for (const line of lines) {
     if (isTeacherHeader(line)) {
-      currentTeacher = clean(line).replace(/,+$/, "");
+      currentTeacherGroup = {
+        teacher: clean(line).replace(/,+$/, ""),
+        entries: [],
+        _seen: new Set(),
+      };
+      teachers.push(currentTeacherGroup);
       continue;
     }
 
@@ -115,30 +121,39 @@ function parseItems(text) {
 
     if (!summary) continue;
 
-    const key = [
-      currentTeacher || "",
-      classes.join(","),
-      lessons.join(","),
-      type,
-      summary
-    ].join("|");
-
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    items.push({
-      teacher: currentTeacher,
+    const entry = {
+      teacher: currentTeacherGroup ? currentTeacherGroup.teacher : null,
       classes,
       className: classes[0] || null,
       lessons,
       type,
       summary,
       raw: line,
-      kind: classes.length ? "class" : (lessons.length ? "teacher" : "general"),
-    });
+    };
+
+    const key = [
+      entry.teacher || "",
+      entry.classes.join(","),
+      entry.lessons.join(","),
+      entry.type,
+      entry.summary,
+    ].join("|");
+
+    if (currentTeacherGroup) {
+      if (currentTeacherGroup._seen.has(key)) continue;
+      currentTeacherGroup._seen.add(key);
+      currentTeacherGroup.entries.push(entry);
+    } else {
+      if (seenGeneral.has(key)) continue;
+      seenGeneral.add(key);
+      general.push(entry);
+    }
   }
 
-  return items;
+  return {
+    general,
+    teachers: teachers.map(({ _seen, ...group }) => group),
+  };
 }
 
 export default async function handler(req, res) {
@@ -180,14 +195,15 @@ export default async function handler(req, res) {
     const pdfBuffer = Buffer.from(await pdfRes.arrayBuffer());
     const parsed = await pdfParse(pdfBuffer);
 
-    const items = parseItems(parsed.text);
+    const data = parseItems(parsed.text);
 
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=3600");
 
     res.status(200).json({
       source: pdfUrl,
-      items,
+      general: data.general,
+      teachers: data.teachers,
       rawText: parsed.text,
     });
   } catch (err) {
