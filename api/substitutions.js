@@ -40,8 +40,13 @@ function isTeacherHeader(line) {
 }
 
 function extractClasses(line) {
-  const matches = [...line.matchAll(/\b\d{1,2}[A-Za-zĄĆĘŁŃÓŚŹŻąćęłńóśźż][A-Za-z0-9ĄĆĘŁŃÓŚŹŻąćęłńóśźż./-]*\b/g)];
-  return [...new Set(matches.map(m => m[0]))];
+  const matches = [...line.matchAll(
+    /\b([1-5])\s*(LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\b/gi
+  )];
+
+  return [...new Set(matches.map(match => {
+    return `${match[1]}${match[2]}`.replace(/\s+/g, "");
+  }))];
 }
 
 function parseLessons(line) {
@@ -199,13 +204,18 @@ export default async function handler(req, res) {
 
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=3600");
-
+	
+	const dateLabel =
+	(parsed.text.match(
+		/(?:Poniedziałek|Wtorek|Środa|Czwartek|Piątek|Sobota|Niedziela)\s+\d{1,2}\s+[A-Za-ząćęłńóśźż]+\s+\d{4}r?/i
+	) || [])[0] || null;
     res.status(200).json({
-      source: pdfUrl,
-      general: data.general,
-      teachers: data.teachers,
-      rawText: parsed.text,
-    });
+		source: pdfUrl,
+		dateLabel,
+		general: data.general,
+		teachers: data.teachers,
+		rawText: parsed.text,
+	});
   } catch (err) {
     res.status(500).json({
       error: "Błąd zastępstw",
