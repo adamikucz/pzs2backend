@@ -29,18 +29,12 @@ function isNoiseLine(line) {
   );
 }
 
-function isTeacherHeader(line) {
-  const t = clean(line);
-  if (!t) return false;
-  if (t.includes("lek.")) return false;
-  if (/\b\d{1,2}:\d{2}\b/.test(t)) return false;
-  if (!/[,.]$/.test(t)) return false;
-
-  return /^(?:[IVXLCDM]+\s+)?(?:[A-Z]\.\s*)?[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s+[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?[,\.]$/u.test(t);
+function stripTeacherPunctuation(line) {
+  return clean(line).replace(/[,.]+$/g, "").trim();
 }
 
 function extractClasses(line) {
-  const matches = [...line.matchAll(
+  const matches = [...String(line || "").matchAll(
     /\b([1-5])\s*(LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\b/gi
   )];
 
@@ -50,10 +44,10 @@ function extractClasses(line) {
 }
 
 function parseLessons(line) {
-  const match = line.match(/(?:lek\.|l\.)\s*([\d,\-\s]+)/i);
+  const match = String(line || "").match(/\b(?:lek|le|l)\.?\s*([\d,\-\si]+)/i);
   if (!match) return [];
 
-  const raw = clean(match[1]);
+  const raw = clean(match[1]).replace(/\s+i\s+/gi, ",");
   const parts = raw.split(",").map(s => s.trim()).filter(Boolean);
   const result = [];
 
@@ -66,11 +60,48 @@ function parseLessons(line) {
       continue;
     }
 
-    const num = Number(part);
+    const num = Number(part.match(/\d+/)?.[0]);
     if (!Number.isNaN(num)) result.push(num);
   }
 
   return [...new Set(result)];
+}
+
+function isTeacherHeader(line) {
+  const t = stripTeacherPunctuation(line);
+  if (!t) return false;
+  if (/\b(?:lek|le|l)\.?\b/i.test(t)) return false;
+  if (/\b\d{1,2}:\d{2}\b/.test(t)) return false;
+  if (/[-–—]/.test(t)) return false;
+  if (/^(?:nauczyciele|praktyki|egzamin|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(t)) return false;
+  if (t.length > 60) return false;
+
+  return /^(?:[IVXLCDM]+\s+)?[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s+[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?$/u.test(t);
+}
+
+function looksLikeSubstitutionLine(line) {
+  const t = clean(line);
+  if (!t) return false;
+  if (/^(?:nauczyciele|praktyki|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(t)) return false;
+
+  const hasClass = extractClasses(t).length > 0;
+  const hasLesson = /\b(?:lek|le|l)\.?\s*\d/i.test(t);
+  const hasKnownMarker = /\b(?:zwolnion|odwołan|biblioteka|łączenie|zastęp|przenies)/i.test(t);
+
+  return (hasClass && (hasLesson || hasKnownMarker)) || /^\s*(?:lek|le|l)\.?\s*\d/i.test(t);
+}
+
+function isTeacherHeaderAt(lines, index) {
+  if (!isTeacherHeader(lines[index])) return false;
+
+  for (let i = index + 1; i < lines.length; i++) {
+    const next = clean(lines[i]);
+    if (!next) continue;
+    if (isTeacherHeader(next)) return false;
+    return looksLikeSubstitutionLine(next);
+  }
+
+  return false;
 }
 
 function detectType(line) {
@@ -84,7 +115,7 @@ function detectType(line) {
 function stripMarkers(line) {
   return clean(
     line
-      .replace(/(?:lek\.|l\.)\s*[\d,\-\s]+/gi, " ")
+      .replace(/\b(?:lek|le|l)\.?\s*[\d,\-\si]+/gi, " ")
       .replace(/\bzwolnion[aey]\b/gi, " ")
       .replace(/\bodwołan[aey]?\b/gi, " ")
       .replace(/\bprzen\.\b/gi, " ")
@@ -92,6 +123,61 @@ function stripMarkers(line) {
       .replace(/\bna\s+\d{1,2}-\d{2}\s+l\.\s*\d+/gi, " ")
       .replace(/\s+/g, " ")
   );
+}
+
+function extractTeacherNames(text) {
+  const source = clean(text)
+    .replace(/\blek\.?\s*[\d,\-\si]+\s*-\s*/gi, " ")
+    .replace(/\bl\.\s*\d+/gi, " ");
+
+  const matches = [...source.matchAll(/\b[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s*[–-]\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?/gu)];
+
+  return [...new Set(matches.map(match => clean(match[0])))] ;
+}
+
+function extractAbsentTeachersFromLines(lines) {
+  const chunks = [];
+  let collecting = false;
+
+  for (const line of lines) {
+    const t = clean(line);
+    if (!t) continue;
+
+    if (/^nauczyciele\s+nieobecni\s*:/i.test(t)) {
+      collecting = true;
+      chunks.push(t.replace(/^nauczyciele\s+nieobecni\s*:/i, ""));
+      continue;
+    }
+
+    if (!collecting) continue;
+
+    if (/^(?:praktyki|nauczyciele\s+zaangażowani|[•]|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(t)) {
+      break;
+    }
+
+    chunks.push(t);
+  }
+
+  return extractTeacherNames(chunks.join(" "));
+}
+
+function createEntry(line, currentTeacherGroup = null) {
+  const classes = extractClasses(line);
+  const lessons = parseLessons(line);
+  const type = detectType(line);
+  const summary = stripMarkers(line);
+
+  if (!summary) return null;
+
+  return {
+    teacher: currentTeacherGroup ? currentTeacherGroup.teacher : null,
+    classes,
+    className: classes[0] || null,
+    lessons,
+    type,
+    summary,
+    raw: line,
+  };
 }
 
 function parseItems(text) {
@@ -105,13 +191,15 @@ function parseItems(text) {
   const general = [];
   const teachers = [];
   const seenGeneral = new Set();
-
+  const absentTeachers = extractAbsentTeachersFromLines(lines);
   let currentTeacherGroup = null;
 
-  for (const line of lines) {
-    if (isTeacherHeader(line)) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (isTeacherHeaderAt(lines, i)) {
       currentTeacherGroup = {
-        teacher: clean(line).replace(/,+$/, ""),
+        teacher: stripTeacherPunctuation(line),
         entries: [],
         _seen: new Set(),
       };
@@ -119,22 +207,17 @@ function parseItems(text) {
       continue;
     }
 
-    const classes = extractClasses(line);
-    const lessons = parseLessons(line);
-    const type = detectType(line);
-    const summary = stripMarkers(line);
+    const entry = createEntry(line, currentTeacherGroup);
+    if (!entry) continue;
 
-    if (!summary) continue;
-
-    const entry = {
-      teacher: currentTeacherGroup ? currentTeacherGroup.teacher : null,
-      classes,
-      className: classes[0] || null,
-      lessons,
-      type,
-      summary,
-      raw: line,
-    };
+    if (currentTeacherGroup && !looksLikeSubstitutionLine(line)) {
+      const key = ["", entry.classes.join(","), entry.lessons.join(","), entry.type, entry.summary].join("|");
+      if (!seenGeneral.has(key)) {
+        seenGeneral.add(key);
+        general.push({ ...entry, teacher: null });
+      }
+      continue;
+    }
 
     const key = [
       entry.teacher || "",
@@ -157,7 +240,10 @@ function parseItems(text) {
 
   return {
     general,
-    teachers: teachers.map(({ _seen, ...group }) => group),
+    teachers: teachers
+      .filter(group => group.entries.length)
+      .map(({ _seen, ...group }) => group),
+    absentTeachers,
   };
 }
 
@@ -203,19 +289,21 @@ export default async function handler(req, res) {
     const data = parseItems(parsed.text);
 
     res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Cache-Control", "s-maxage=600, stale-while-revalidate=3600");
-	
-	const dateLabel =
-	(parsed.text.match(
-		/(?:Poniedziałek|Wtorek|Środa|Czwartek|Piątek|Sobota|Niedziela)\s+\d{1,2}\s+[A-Za-ząćęłńóśźż]+\s+\d{4}r?/i
-	) || [])[0] || null;
+    res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+
+    const dateLabel =
+      (parsed.text.match(
+        /(?:Poniedziałek|Wtorek|Środa|Czwartek|Piątek|Sobota|Niedziela)\s+\d{1,2}\s+[A-Za-ząćęłńóśźż]+\s+\d{4}r?/i
+      ) || [])[0] || null;
+
     res.status(200).json({
-		source: pdfUrl,
-		dateLabel,
-		general: data.general,
-		teachers: data.teachers,
-		rawText: parsed.text,
-	});
+      source: pdfUrl,
+      dateLabel,
+      general: data.general,
+      teachers: data.teachers,
+      absentTeachers: data.absentTeachers,
+      rawText: parsed.text,
+    });
   } catch (err) {
     res.status(500).json({
       error: "Błąd zastępstw",
