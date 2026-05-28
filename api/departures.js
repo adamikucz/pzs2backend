@@ -18,8 +18,14 @@ function clean(text) {
     .trim();
 }
 
-function normalizeDeparture(row, directions = {}) {
+function parseRelativeMinutes(time) {
+  const match = clean(time).toLowerCase().match(/^(\d+)\s*min/);
+  return match ? Number(match[1]) : null;
+}
+
+function normalizeDeparture(row, directions = {}, stopTimestamp = 0) {
   const directionId = String(row.direction_id || "");
+  const relativeMinutes = parseRelativeMinutes(row.time);
 
   return {
     line: clean(row.line_name),
@@ -30,9 +36,16 @@ function normalizeDeparture(row, directions = {}) {
     canceled: Boolean(row.canceled),
     estimated: Boolean(row.is_estimated),
     platform: clean(row.platform),
+    directionId,
     direction: clean(directions[directionId] || ""),
     vehicleType: row.vehicle_type ?? null,
-    tripId: row.trip_id ?? null
+    tripId: row.trip_id ?? null,
+    tripExecutionId: row.trip_execution_id || null,
+    tripIndex: row.trip_index ?? null,
+    relativeMinutes,
+    departureTimestamp: Number.isFinite(relativeMinutes) && Number(stopTimestamp)
+      ? Number(stopTimestamp) + relativeMinutes * 60
+      : null
   };
 }
 
@@ -58,7 +71,7 @@ async function fetchStop(stop) {
     platform: clean(rows[0]?.platform || ""),
     timestamp: Number(data.timestamp || 0),
     departures: rows
-      .map(row => normalizeDeparture(row, directions))
+      .map(row => normalizeDeparture(row, directions, Number(data.timestamp || 0)))
       .filter(row => row.line && row.time)
   };
 }
