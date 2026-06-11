@@ -33,13 +33,24 @@ function stripTeacherPunctuation(line) {
   return clean(line).replace(/[,.]+$/g, "").trim();
 }
 
+const CLASS_RE = /\b([1-5])\s*(LO[a-d]?|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?)\b/giu;
+
+function normalizeClassCode(grade, type) {
+  const raw = String(type || "").replace(/\s+/g, "");
+  const lower = raw.toLowerCase();
+
+  if (lower.startsWith("lo")) return `${grade}LO${lower.slice(2)}`;
+  if (lower.startsWith("bs")) return `${grade}BS${lower.slice(2)}`;
+  if (lower.startsWith("t")) return `${grade}T${lower.slice(1)}`;
+
+  return `${grade}${raw}`;
+}
+
 function extractClasses(line) {
-  const matches = [...String(line || "").matchAll(
-    /\b([1-5])\s*(LO[a-d]|T[a-ząćęłńóśźż]{1,3}|BS[a-d]?|Bs[a-d]?)\b/gi
-  )];
+  const matches = [...String(line || "").matchAll(CLASS_RE)];
 
   return [...new Set(matches.map(match => {
-    return `${match[1]}${match[2]}`.replace(/\s+/g, "");
+    return normalizeClassCode(match[1], match[2]);
   }))];
 }
 
@@ -72,7 +83,9 @@ function isTeacherHeader(line) {
   if (!t) return false;
   if (/\b(?:lek|le|l)\.?\b/i.test(t)) return false;
   if (/\b\d{1,2}:\d{2}\b/.test(t)) return false;
-  if (/[-–—]/.test(t)) return false;
+  // Nazwiska dwuczłonowe typu "Cichocka-Krawczyk" są poprawnymi nagłówkami.
+  // Blokujemy tylko myślnik jako separator opisowy, np. "Szkolenie - W. Filipek".
+  if (/\s[-–—]\s/.test(t)) return false;
   if (/^(?:nauczyciele|praktyki|egzamin|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(t)) return false;
   if (t.length > 60) return false;
 
@@ -135,6 +148,14 @@ function extractTeacherNames(text) {
   return [...new Set(matches.map(match => clean(match[0])))] ;
 }
 
+function splitTeacherList(text) {
+  return String(text || "")
+    .split(",")
+    .map(part => stripTeacherPunctuation(part))
+    .filter(Boolean)
+    .filter(part => /^[A-ZĄĆĘŁŃÓŚŹŻ]\.\s*[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+(?:\s+[A-ZĄĆĘŁŃÓŚŹŻ][\p{L}.'-]+)?$/u.test(part));
+}
+
 function extractAbsentTeachersFromLines(lines) {
   const chunks = [];
   let collecting = false;
@@ -151,14 +172,20 @@ function extractAbsentTeachersFromLines(lines) {
 
     if (!collecting) continue;
 
-    if (/^(?:praktyki|nauczyciele\s+zaangażowani|[•]|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(t)) {
+    if (/^(?:[•●◦▪▫‣⁃\-–—\uF0B7]\s*|praktyki|nauczyciele\s+zaangażowani|wyłączone|szkolenie|zajęcia|egzaminy|projekt|wycieczka|warsztaty|olimpiada)\b/i.test(t)) {
+      break;
+    }
+
+    if (isTeacherHeader(t) || looksLikeSubstitutionLine(t)) {
       break;
     }
 
     chunks.push(t);
   }
 
-  return extractTeacherNames(chunks.join(" "));
+  const declared = splitTeacherList(chunks.join(" "));
+
+  return [...new Set(declared.length ? declared : extractTeacherNames(chunks.join(" ")))];
 }
 
 function createEntry(line, currentTeacherGroup = null) {
