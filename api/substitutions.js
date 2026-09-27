@@ -276,7 +276,42 @@ function parseItems(text) {
 
 function findSubstitutionPdfUrl($) {
   const substitutionRe = /\bzast(?:ę|e)pstw\w*/i;
+  const dateRe = /\b(\d{1,2})(?:\s+|[-_])(stycznia|lutego|marca|kwietnia|maja|czerwca|lipca|sierpnia|września|wrzesnia|października|pazdziernika|listopada|grudnia)(?:\s+|[-_])(\d{4})r?\b/i;
+  const months = {
+    stycznia: 0,
+    lutego: 1,
+    marca: 2,
+    kwietnia: 3,
+    maja: 4,
+    czerwca: 5,
+    lipca: 6,
+    sierpnia: 7,
+    września: 8,
+    wrzesnia: 8,
+    października: 9,
+    pazdziernika: 9,
+    listopada: 10,
+    grudnia: 11,
+  };
   const candidates = new Map();
+
+  const extractDate = text => {
+    const match = String(text || "").match(dateRe);
+    if (!match) return null;
+
+    const year = Number(match[3]);
+    const month = months[match[2].toLowerCase()];
+    const day = Number(match[1]);
+    const date = new Date(year, month, day);
+
+    if (
+      date.getFullYear() !== year ||
+      date.getMonth() !== month ||
+      date.getDate() !== day
+    ) return null;
+
+    return date.getTime();
+  };
 
   $("a[href]").each((_, element) => {
     const href = $(element).attr("href");
@@ -290,25 +325,49 @@ function findSubstitutionPdfUrl($) {
     const linkText = clean($(element).text());
     const title = clean($(element).attr("title"));
     const ariaLabel = clean($(element).attr("aria-label"));
+    const linkDate = extractDate(linkText) || extractDate(href);
     let score = 0;
+    let hasSubstitutionContext = false;
 
-    if (substitutionRe.test(linkText)) score += 100;
-    if (substitutionRe.test(title)) score += 80;
-    if (substitutionRe.test(ariaLabel)) score += 80;
+    if (substitutionRe.test(linkText)) {
+      score += 150;
+      hasSubstitutionContext = true;
+    }
+    if (substitutionRe.test(title)) {
+      score += 120;
+      hasSubstitutionContext = true;
+    }
+    if (substitutionRe.test(ariaLabel)) {
+      score += 120;
+      hasSubstitutionContext = true;
+    }
+    if (/\bzast(?:ę|e)pstw/i.test(lowerHref)) {
+      score += 100;
+      hasSubstitutionContext = true;
+    }
+    if (linkDate) score += 60;
     if (/^pobierz$/i.test(linkText)) score += 5;
-    if (isDirectPdf) score += 20;
-    if (isDownload) score += 15;
+    if (isDirectPdf) score += 10;
+    if (isDownload) score += 25;
 
     let parent = $(element).parent();
-    for (let level = 0; level < 4 && parent && parent.length; level++) {
+    for (let level = 0; level < 8 && parent && parent.length; level++) {
       const context = clean(parent.text());
-      if (context && context.length <= 800 && substitutionRe.test(context)) {
-        score += [60, 45, 30, 20][level];
+      if (context && context.length <= 2000 && substitutionRe.test(context)) {
+        score += [65, 55, 45, 35, 30, 25, 20, 15][level];
+        hasSubstitutionContext = true;
       }
 
       const classAndId = clean(`${parent.attr("class") || ""} ${parent.attr("id") || ""}`);
       if (substitutionRe.test(classAndId)) {
-        score += [35, 30, 25, 15][level];
+        score += [40, 35, 30, 25, 20, 15, 10, 5][level];
+        hasSubstitutionContext = true;
+      }
+
+      const heading = parent.find("h1, h2, h3, h4, h5, h6").first();
+      if (heading.length && substitutionRe.test(clean(heading.text()))) {
+        score += 80;
+        hasSubstitutionContext = true;
       }
 
       parent = parent.parent();
@@ -317,19 +376,25 @@ function findSubstitutionPdfUrl($) {
     const hrefLooksUnrelated = /(?:statut|regulamin|plan[-_ ]?lekcji|podr[ęe]cznik|harmonogram|rekrutac|egzamin)/i.test(lowerHref);
     if (hrefLooksUnrelated) score -= 100;
 
+    if (!hasSubstitutionContext) return;
+
     const key = new URL(href, ORIGIN).toString();
     const existing = candidates.get(key);
     if (!existing || score > existing.score) {
-      candidates.set(key, { href, score });
+      candidates.set(key, { href, score, date: linkDate });
     }
   });
 
   const ranked = [...candidates.entries()]
-    .map(([url, candidate]) => ({ url, score: candidate.score }))
-    .sort((a, b) => b.score - a.score);
+    .map(([url, candidate]) => ({ url, ...candidate }))
+    .sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      if (a.date && b.date && a.date !== b.date) return b.date - a.date;
+      return 0;
+    });
 
-  if (!ranked.length || ranked[0].score < 60) return null;
-  if (ranked.length > 1 && ranked[0].score === ranked[1].score) return null;
+  if (!ranked.length || ranked[0].score < 95) return null;
+  if (ranked.length > 1 && ranked[0].score === ranked[1].score && ranked[0].date === ranked[1].date) return null;
 
   return new URL(ranked[0].url, ORIGIN).toString();
 }
