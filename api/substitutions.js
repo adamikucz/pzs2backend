@@ -274,6 +274,66 @@ function parseItems(text) {
   };
 }
 
+function findSubstitutionPdfUrl($) {
+  const substitutionRe = /\bzast(?:ę|e)pstw\w*/i;
+  const candidates = new Map();
+
+  $("a[href]").each((_, element) => {
+    const href = $(element).attr("href");
+    if (!href) return;
+
+    const lowerHref = href.toLowerCase();
+    const isDirectPdf = /\.pdf(?:[?#]|$)/i.test(lowerHref);
+    const isDownload = /(?:[?&])download=/i.test(href) || lowerHref.includes("download=");
+    if (!isDirectPdf && !isDownload) return;
+
+    const linkText = clean($(element).text());
+    const title = clean($(element).attr("title"));
+    const ariaLabel = clean($(element).attr("aria-label"));
+    let score = 0;
+
+    if (substitutionRe.test(linkText)) score += 100;
+    if (substitutionRe.test(title)) score += 80;
+    if (substitutionRe.test(ariaLabel)) score += 80;
+    if (/^pobierz$/i.test(linkText)) score += 5;
+    if (isDirectPdf) score += 20;
+    if (isDownload) score += 15;
+
+    let parent = $(element).parent();
+    for (let level = 0; level < 4 && parent && parent.length; level++) {
+      const context = clean(parent.text());
+      if (context && context.length <= 800 && substitutionRe.test(context)) {
+        score += [60, 45, 30, 20][level];
+      }
+
+      const classAndId = clean(`${parent.attr("class") || ""} ${parent.attr("id") || ""}`);
+      if (substitutionRe.test(classAndId)) {
+        score += [35, 30, 25, 15][level];
+      }
+
+      parent = parent.parent();
+    }
+
+    const hrefLooksUnrelated = /(?:statut|regulamin|plan[-_ ]?lekcji|podr[ęe]cznik|harmonogram|rekrutac|egzamin)/i.test(lowerHref);
+    if (hrefLooksUnrelated) score -= 100;
+
+    const key = new URL(href, ORIGIN).toString();
+    const existing = candidates.get(key);
+    if (!existing || score > existing.score) {
+      candidates.set(key, { href, score });
+    }
+  });
+
+  const ranked = [...candidates.entries()]
+    .map(([url, candidate]) => ({ url, score: candidate.score }))
+    .sort((a, b) => b.score - a.score);
+
+  if (!ranked.length || ranked[0].score < 60) return null;
+  if (ranked.length > 1 && ranked[0].score === ranked[1].score) return null;
+
+  return new URL(ranked[0].url, ORIGIN).toString();
+}
+
 export default async function handler(req, res) {
   try {
     const pageRes = await fetch(SOURCE_PAGE, {
@@ -291,12 +351,10 @@ export default async function handler(req, res) {
     const pageHtml = await pageRes.text();
     const $ = cheerio.load(pageHtml);
 
-    const href = $('a[href*="download="]').first().attr("href");
-    if (!href) {
-      return res.status(404).json({ error: "Nie znaleziono linku do PDF" });
+    const pdfUrl = findSubstitutionPdfUrl($);
+    if (!pdfUrl) {
+      return res.status(404).json({ error: "Nie znaleziono aktualnego PDF zastępstw" });
     }
-
-    const pdfUrl = new URL(href, ORIGIN).toString();
 
     const pdfRes = await fetch(pdfUrl, {
       cache: "no-store",
