@@ -1,7 +1,7 @@
 import * as cheerio from "cheerio";
 import pdfParse from "pdf-parse";
 
-const SOURCE_PAGE = "https://pzs2pszczyna.pl/zastepstwa";
+const SOURCE_PAGE = "https://pzs2pszczyna.pl/uczen/zastepstwa";
 const ORIGIN = "https://pzs2pszczyna.pl";
 
 function clean(text) {
