@@ -1,11 +1,17 @@
 import * as cheerio from 'cheerio';
 
+const BASE_URL = 'https://pzs2pszczyna.pl';
+const NEWS_URL = `${BASE_URL}/aktualnosci`;
+
 export default async function handler(req, res) {
   try {
-    const response = await fetch('https://pzs2pszczyna.pl/', {
+    const response = await fetch(NEWS_URL, {
       headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; RolbudaBot/1.0)'
-      }
+        'User-Agent': 'Mozilla/5.0 (compatible; RolbudaBot/1.0)',
+        'Accept': 'text/html,application/xhtml+xml'
+      },
+      // Zapobiega wiszeniu requestu w nieskończoność
+      signal: AbortSignal.timeout(10000)
     });
 
     if (!response.ok) {
@@ -17,64 +23,62 @@ export default async function handler(req, res) {
 
     const news = [];
 
-    $('h2 a').each((_, el) => {
-      const link = $(el);
+    $('li.wp-block-post').each((_, el) => {
+      const item = $(el);
 
-      const title = link.text().replace(/\s+/g, ' ').trim();
+      const link = item.find(
+        '.wp-block-post-title a[href], h2.wp-block-post-title a[href]'
+      ).first();
+
+      if (!link.length) return;
+
+      const title = link
+        .text()
+        .replace(/\s+/g, ' ')
+        .trim();
+
       const href = link.attr('href') || '';
 
-      if (!title || !href) return;
+      if (!title || !href || title.length <= 3) return;
 
-      // Pomijamy elementy, które nie są aktualnościami
+      // Pomijamy ewentualne elementy, które nie są aktualnościami
+      const normalizedTitle = title.toLowerCase();
+
       if (
         title === 'Plan lekcji' ||
         title === 'SCWEW Pszczyna' ||
         title === 'Pobierz' ||
-        title.toLowerCase().includes('sale')
+        normalizedTitle.includes('sale')
       ) {
         return;
       }
 
-      const article = link.closest('article, .item, .blog-item, .item-page');
+      const fullUrl = href.startsWith('http')
+        ? href
+        : new URL(href, BASE_URL).href;
 
-      let desc = '';
+      // Nowa strona posiada gotową zajawkę wpisu
+      let desc = item
+        .find(
+          '.wp-block-post-excerpt__excerpt, .wp-block-post-excerpt p'
+        )
+        .first()
+        .text()
+        .replace(/\s+/g, ' ')
+        .trim();
 
-      if (article.length) {
-        desc = article
-          .find('p')
+      // Fallback - gdyby WordPress zmienił klasę zajawki
+      if (!desc) {
+        desc = item
+          .find('.wp-block-post-excerpt')
           .first()
           .text()
           .replace(/\s+/g, ' ')
           .trim();
       }
 
-      // Jeśli nie znaleziono opisu wewnątrz kontenera,
-      // szukamy pierwszego paragrafu po nagłówku.
-      if (!desc) {
-        let next = link.closest('h2').next();
-
-        for (let i = 0; i < 5 && next.length; i++) {
-          if (next.is('p') || next.find('p').length) {
-            desc = (next.is('p') ? next : next.find('p').first())
-              .text()
-              .replace(/\s+/g, ' ')
-              .trim();
-            break;
-          }
-
-          next = next.next();
-        }
-      }
-
-      const fullUrl = href.startsWith('http')
-        ? href
-        : new URL(href, 'https://pzs2pszczyna.pl/').href;
-
       // Nie dodawaj duplikatów
-      if (
-        !news.some(item => item.href === fullUrl) &&
-        title.length > 3
-      ) {
+      if (!news.some(article => article.href === fullUrl)) {
         news.push({
           title,
           desc,
@@ -84,16 +88,18 @@ export default async function handler(req, res) {
     });
 
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=600');
+    res.setHeader(
+      'Cache-Control',
+      's-maxage=300, stale-while-revalidate=600'
+    );
 
-    res.status(200).json(news.slice(0, 5));
-
+    return res.status(200).json(news.slice(0, 5));
   } catch (err) {
     console.error('NEWS ERROR:', err);
 
-    res.status(500).json({
+    return res.status(500).json({
       error: 'Błąd pobierania aktualności',
-      details: err.message
+      details: err instanceof Error ? err.message : String(err)
     });
   }
 }
